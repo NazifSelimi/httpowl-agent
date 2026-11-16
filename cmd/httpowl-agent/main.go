@@ -22,6 +22,9 @@ func (m *multi) String() string     { return fmt.Sprint(*m) }
 func (m *multi) Set(v string) error { *m = append(*m, v); return nil }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "setup-logs" {
+		os.Exit(setupLogs(os.Args[2:]))
+	}
 	cfgPath := flag.String("config", defaultConfig(), "config file")
 	token := flag.String("token", "", "agent token (overrides config)")
 	server := flag.String("server", "", "HTTPowl server URL (overrides config)")

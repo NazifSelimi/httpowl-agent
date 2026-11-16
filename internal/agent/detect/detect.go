@@ -31,6 +31,29 @@ var processNames = map[string]string{
 	"lshttpd": "litespeed", "openlitespeed": "litespeed", "caddy": "caddy", "traefik": "traefik",
 }
 
+// domainLogs are the logs written by `httpowl-agent setup-logs` (they include the domain).
+// When one exists it replaces the server's default logs, so no visit is counted twice.
+var domainLogs = map[string]string{
+	"nginx":  "/var/log/nginx/httpowl.log",
+	"apache": "/var/log/apache2/httpowl.log",
+}
+
+func init() {
+	if _, err := os.Stat("/etc/httpd"); err == nil { // RHEL-style Apache
+		domainLogs["apache"] = "/var/log/httpd/httpowl.log"
+	}
+}
+
+// DomainLog returns the HTTPowl domain log for a server, if setup-logs created it.
+func DomainLog(server string) string {
+	if p, ok := domainLogs[server]; ok {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
 // Detect returns servers that are running or have log files.
 func Detect() []Server {
 	running := runningServers()
@@ -40,6 +63,9 @@ func Detect() []Server {
 			continue
 		}
 		if len(tail.Files(s.Patterns)) > 0 || running[s.Name] {
+			if p := DomainLog(s.Name); p != "" {
+				s.Patterns = []string{p}
+			}
 			out = append(out, s)
 		}
 	}

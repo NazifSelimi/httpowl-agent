@@ -2,6 +2,7 @@
 # HTTPowl agent installer.
 #   curl -sL https://httpowl.net/install | sudo sh -s -- --token owl_xxx
 # Options: --token T  --server URL  --log PATH (repeatable)  --no-firewall  --uninstall
+#          --setup-logs / --no-setup-logs  (add a log with domain names without asking / never)
 set -eu
 
 SERVER="https://httpowl.net"
@@ -9,6 +10,7 @@ TOKEN=""
 LOGS=""
 FIREWALL="auto"
 UNINSTALL=0
+SETUP_LOGS=ask
 BIN=/usr/local/bin/httpowl-agent
 CONF_DIR=/etc/httpowl
 UNIT=/etc/systemd/system/httpowl-agent.service
@@ -23,6 +25,8 @@ while [ $# -gt 0 ]; do
     --log) LOGS="$LOGS \"$2\""; shift 2 ;;
     --no-firewall) FIREWALL="off"; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
+    --setup-logs) SETUP_LOGS=yes; shift ;;
+    --no-setup-logs) SETUP_LOGS=no; shift ;;
     *) die "unknown option: $1" ;;
   esac
 done
@@ -35,6 +39,7 @@ if [ "$UNINSTALL" = 1 ]; then
   say "removing the agent and every block it added"
   systemctl disable --now httpowl-agent 2>/dev/null || true
   [ -x "$BIN" ] && "$BIN" -cleanup || true
+  [ -x "$BIN" ] && "$BIN" setup-logs --undo >/dev/null 2>&1 || true
   rm -f "$UNIT" "$BIN"; rm -rf "$CONF_DIR" /var/lib/httpowl-agent
   systemctl daemon-reload
   say "done — HTTPowl agent removed"
@@ -109,6 +114,25 @@ systemctl restart httpowl-agent
 say "detected:"
 "$BIN" -config "$CONF_DIR/agent.json" -detect || true
 sleep 2
+# Several websites on one server? The default logs don't say which site a visit
+# was for. Offer to add a log with domain names (asks first; default is no).
+set +e
+"$BIN" setup-logs --check >/dev/null 2>&1
+NEEDED=$?
+set -e
+if [ "$NEEDED" = 3 ]; then
+  case "$SETUP_LOGS" in
+    yes) "$BIN" setup-logs --yes && systemctl restart httpowl-agent ;;
+    no)  say "tip: to tell your websites apart later, run: sudo httpowl-agent setup-logs" ;;
+    *)   if [ -r /dev/tty ]; then
+           "$BIN" setup-logs && systemctl restart httpowl-agent || true
+         else
+           say "tip: to tell your websites apart, run: sudo httpowl-agent setup-logs"
+         fi ;;
+  esac
+  sleep 2
+fi
+
 if systemctl is-active --quiet httpowl-agent; then
   say "running ✔  logs: journalctl -u httpowl-agent -f"
   say "remove any time: curl -sL $SERVER/install | sudo sh -s -- --uninstall"

@@ -61,6 +61,18 @@ type Agent struct {
 	fw        firewall
 	botWatch  *botWatcher
 	rs        ruleState
+
+	withDomain, withoutDomain int // lines since the last heartbeat (guarded by mu)
+}
+
+func (a *Agent) countDomain(has bool) {
+	a.mu.Lock()
+	if has {
+		a.withDomain++
+	} else {
+		a.withoutDomain++
+	}
+	a.mu.Unlock()
 }
 
 func New(cfg Config, version string) (*Agent, error) {
@@ -167,6 +179,7 @@ func (a *Agent) ship(ctx context.Context, lines <-chan tail.Line) {
 				continue
 			}
 			a.botWatch.see(r)
+			a.countDomain(r.Host != "")
 			buf = append(buf, r)
 			if len(buf) > maxBuffered { // server unreachable for long: drop oldest
 				buf = buf[len(buf)-maxBuffered:]
@@ -184,11 +197,17 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	host, _ := os.Hostname()
 	a.mu.Lock()
 	lastErr := a.lastError
+	var hasDomain *bool
+	if a.withDomain+a.withoutDomain > 0 {
+		v := a.withoutDomain == 0
+		hasDomain = &v
+	}
+	a.withDomain, a.withoutDomain = 0, 0
 	a.mu.Unlock()
 	hb := wire.Heartbeat{
 		Version: a.Version, Hostname: host, OS: runtime.GOOS, Arch: runtime.GOARCH,
 		Servers: a.Servers(), LogPaths: a.LogFiles(), Firewall: a.fw.Name(),
-		ServerIPs: sys.ServerIPs(), SSHPeers: sys.SSHPeers(), RulesApplied: a.appliedCount(), LastError: lastErr,
+		ServerIPs: sys.ServerIPs(), SSHPeers: sys.SSHPeers(), RulesApplied: a.appliedCount(), LastError: lastErr, LogsHaveDomain: hasDomain,
 	}
 	return a.post(ctx, "/api/agent/heartbeat", hb, nil)
 }

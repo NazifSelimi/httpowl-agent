@@ -14,6 +14,8 @@ func TestFormats(t *testing.T) {
 		{"nginx with rt", `203.0.113.5 - - [16/Nov/2026:10:00:00 +0100] "POST /wp-login.php HTTP/1.1" 401 0 "-" "curl/8" rt=0.250`, "203.0.113.5", "POST", "/wp-login.php", "curl/8", 401, 250, ""},
 		{"apache common", `2001:db8::1 - frank [16/Nov/2026:10:00:00 -0700] "GET /.env HTTP/1.0" 404 -`, "2001:db8::1", "GET", "/.env", "", 404, 0, ""},
 		{"apache vhost", `shop.example.com:443 198.51.100.7 - - [16/Nov/2026:10:00:00 +0000] "GET / HTTP/2.0" 200 10 "-" "Googlebot/2.1"`, "198.51.100.7", "GET", "/", "Googlebot/2.1", 200, 0, "shop.example.com"},
+		{"httpowl nginx", `Shop.Example.com 198.51.100.7 - - [16/Nov/2026:10:00:00 +0000] "GET /cart HTTP/2.0" 200 10 "-" "Mozilla/5.0" rt=0.031`, "198.51.100.7", "GET", "/cart", "Mozilla/5.0", 200, 31, "shop.example.com"},
+		{"httpowl apache v6", `example.org 2001:db8::5 - - [16/Nov/2026:10:00:00 +0000] "GET / HTTP/1.1" 200 10 "-" "curl/8"`, "2001:db8::5", "GET", "/", "curl/8", 200, 0, "example.org"},
 		{"traefik clf", `192.0.2.1 - - [16/Nov/2026:10:00:00 +0000] "GET /api HTTP/1.1" 200 33 "-" "ua" 42 "router@docker" "http://10.0.0.2:80" 17ms`, "192.0.2.1", "GET", "/api", "ua", 200, 17, ""},
 		{"garbage request", `192.0.2.9 - - [16/Nov/2026:10:00:00 +0000] "\x16\x03\x01" 400 157 "-" "-"`, "192.0.2.9", "-", `\x16\x03\x01`, "-", 400, 0, ""},
 		{"caddy json", `{"level":"info","ts":1763287200.5,"logger":"http.log.access","request":{"remote_ip":"192.0.2.2","client_ip":"192.0.2.3","proto":"HTTP/2.0","method":"GET","host":"ex.com","uri":"/x?y=1","headers":{"User-Agent":["Bot/1"]}},"duration":0.012,"size":99,"status":304}`, "192.0.2.3", "GET", "/x", "Bot/1", 304, 12, "ex.com"},

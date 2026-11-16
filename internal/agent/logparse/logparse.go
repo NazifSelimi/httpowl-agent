@@ -47,13 +47,19 @@ var trailingSec = regexp.MustCompile(`(?:rt=|request_time=|\s)(\d+\.\d{3})\b`)
 
 func parseCLF(line string) (wire.Request, error) {
 	var host string
-	// Apache vhost_combined: "example.com:443 1.2.3.4 - - [...]"
+	// A domain in front of the client IP: Apache vhost_combined ("example.com:443 1.2.3.4 - - [...]")
+	// and the HTTPowl formats from `setup-logs` ("example.com 1.2.3.4 - - [...]").
+	// Plain combined lines have "-" as the second field, never an IP.
 	if sp := strings.IndexByte(line, ' '); sp > 0 {
-		first := line[:sp]
-		if i := strings.LastIndexByte(first, ':'); i > 0 && isDigits(first[i+1:]) {
-			rest := line[sp+1:]
-			if sp2 := strings.IndexByte(rest, ' '); sp2 > 0 && validIP(rest[:sp2]) && !validIP(first) {
-				host, line = first[:i], rest
+		rest := line[sp+1:]
+		if sp2 := strings.IndexByte(rest, ' '); sp2 > 0 && validIP(rest[:sp2]) {
+			host, line = line[:sp], rest
+			if i := strings.LastIndexByte(host, ':'); i > 0 && isDigits(host[i+1:]) && !strings.Contains(host[:i], ":") {
+				host = host[:i]
+			}
+			host = strings.ToLower(strings.TrimSuffix(host, "."))
+			if host == "_" || host == "-" {
+				host = ""
 			}
 		}
 	}
