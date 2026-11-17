@@ -2,6 +2,8 @@ package siteblock
 
 import (
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -68,5 +70,20 @@ server
 	}
 	if removeIncludes(out) != src {
 		t.Errorf("undo does not restore the original:\n%s", removeIncludes(out))
+	}
+}
+
+func TestStatus(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "status")
+	if err := statusAt(f); err != nil {
+		t.Fatalf("helper not run yet is not an error: %v", err)
+	}
+	_ = os.WriteFile(f, []byte("ok\n"), 0o600)
+	if err := statusAt(f); err != nil {
+		t.Fatalf("ok: %v", err)
+	}
+	_ = os.WriteFile(f, []byte("nginx reload failed: Job failed\n"), 0o600)
+	if err := statusAt(f); err == nil || err.Error() != "nginx reload failed: Job failed" {
+		t.Fatalf("got %v", err)
 	}
 }

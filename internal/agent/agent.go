@@ -194,6 +194,11 @@ func (a *Agent) ship(ctx context.Context, lines <-chan tail.Line) {
 }
 
 func (a *Agent) heartbeat(ctx context.Context) error {
+	return a.post(ctx, "/api/agent/heartbeat", a.heartbeatBody(), nil)
+}
+
+// heartbeatBody is what the agent reports every minute.
+func (a *Agent) heartbeatBody() wire.Heartbeat {
 	host, _ := os.Hostname()
 	a.mu.Lock()
 	lastErr := a.lastError
@@ -204,13 +209,15 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	}
 	a.withDomain, a.withoutDomain = 0, 0
 	a.mu.Unlock()
-	hb := wire.Heartbeat{
+	a.rs.mu.Lock()
+	siteErr := a.rs.siteErr
+	a.rs.mu.Unlock()
+	return wire.Heartbeat{
 		Version: a.Version, Hostname: host, OS: runtime.GOOS, Arch: runtime.GOARCH,
 		Servers: a.Servers(), LogPaths: a.LogFiles(), Firewall: a.fw.Name(),
 		ServerIPs: sys.ServerIPs(), SSHPeers: sys.SSHPeers(), RulesApplied: a.appliedCount(), LastError: lastErr, LogsHaveDomain: hasDomain,
-		SiteBlocks: siteBlocksMode(),
+		SiteBlocks: siteBlocksMode(), SiteBlocksError: siteErr,
 	}
-	return a.post(ctx, "/api/agent/heartbeat", hb, nil)
 }
 
 func (a *Agent) post(ctx context.Context, path string, body any, out any) error {

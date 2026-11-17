@@ -136,6 +136,7 @@ func (a *Agent) applySites(allow []netip.Addr, bots map[string][]string) error {
 	content := siteblock.Render(sites)
 	if content != a.rs.siteFile {
 		if err := siteblock.Stage(sites); err != nil {
+			a.rs.siteErr = "could not hand the website blocks to the nginx helper: " + err.Error()
 			return err
 		}
 		a.rs.siteFile = content

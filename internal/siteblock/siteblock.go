@@ -74,8 +74,10 @@ func Stage(sites []Site) error {
 }
 
 // Status is the helper's last outcome: nil when the staged blocks are live.
-func Status() error {
-	b, err := os.ReadFile(StatusFile)
+func Status() error { return statusAt(StatusFile) }
+
+func statusAt(path string) error {
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil // helper hasn't run yet
 	}
