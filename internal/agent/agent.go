@@ -208,6 +208,7 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 		Version: a.Version, Hostname: host, OS: runtime.GOOS, Arch: runtime.GOARCH,
 		Servers: a.Servers(), LogPaths: a.LogFiles(), Firewall: a.fw.Name(),
 		ServerIPs: sys.ServerIPs(), SSHPeers: sys.SSHPeers(), RulesApplied: a.appliedCount(), LastError: lastErr, LogsHaveDomain: hasDomain,
+		SiteBlocks: siteBlocksMode(),
 	}
 	return a.post(ctx, "/api/agent/heartbeat", hb, nil)
 }

@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/NazifSelimi/httpowl-agent/internal/agent"
+	"github.com/NazifSelimi/httpowl-agent/internal/siteblock"
 )
 
 var version = "dev"
@@ -24,6 +25,15 @@ func (m *multi) Set(v string) error { *m = append(*m, v); return nil }
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "setup-logs" {
 		os.Exit(setupLogs(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "apply-site-blocks" { // run by the httpowl-site-blocks systemd helper
+		if err := siteblock.ApplyStaged(); err != nil {
+			fail(err)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "setup-blocks" {
+		os.Exit(setupBlocks(os.Args[2:]))
 	}
 	cfgPath := flag.String("config", defaultConfig(), "config file")
 	token := flag.String("token", "", "agent token (overrides config)")

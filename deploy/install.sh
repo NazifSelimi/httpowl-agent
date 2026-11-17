@@ -40,6 +40,7 @@ if [ "$UNINSTALL" = 1 ]; then
   systemctl disable --now httpowl-agent 2>/dev/null || true
   [ -x "$BIN" ] && "$BIN" -cleanup || true
   [ -x "$BIN" ] && "$BIN" setup-logs --undo >/dev/null 2>&1 || true
+  [ -x "$BIN" ] && "$BIN" setup-blocks --undo >/dev/null 2>&1 || true
   rm -f "$UNIT" "$BIN"; rm -rf "$CONF_DIR" /var/lib/httpowl-agent
   systemctl daemon-reload
   say "done — HTTPowl agent removed"
@@ -132,6 +133,8 @@ if [ "$NEEDED" = 3 ]; then
   esac
   sleep 2
 fi
+"$BIN" setup-blocks --check >/dev/null 2>&1 || \
+  say "tip: to block a visitor from one website only (not all websites on this server), run: sudo httpowl-agent setup-blocks"
 
 if systemctl is-active --quiet httpowl-agent; then
   say "running ✔  logs: journalctl -u httpowl-agent -f"

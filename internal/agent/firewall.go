@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/NazifSelimi/httpowl-agent/internal/agent/sys"
+	"github.com/NazifSelimi/httpowl-agent/internal/siteblock"
 	"github.com/NazifSelimi/httpowl-agent/internal/wire"
 )
 
@@ -48,6 +50,8 @@ type ruleState struct {
 	etag     string
 	lastHash [32]byte
 	applied  int64
+	siteFile string // last per-website block list written to nginx
+	siteErr  string
 }
 
 // syncRules pulls rules (ETag-cached) and re-applies if the desired state changed.
@@ -80,28 +84,81 @@ func (a *Agent) syncRules(ctx context.Context) error {
 		a.rs.mu.Lock()
 		a.rs.rules = rules
 		a.rs.mu.Unlock()
-		a.botWatch.setPatterns(rules.BotPatterns)
+		a.botWatch.setPatterns(rules.BotPatterns, rules.Sites)
 	}
 	return a.applyIfChanged()
 }
 
-// applyIfChanged computes block/allow sets and applies them when they differ from last time.
+// applyIfChanged computes block/allow sets and applies them when they differ from last time:
+// whole-server blocks go to the firewall, one-website blocks to the web server.
 func (a *Agent) applyIfChanged() error {
 	a.rs.mu.Lock()
 	defer a.rs.mu.Unlock()
 	allow := allowList(a.rs.rules.AllowIPs)
-	block := safeBlocks(append(a.rs.rules.BlockCIDRs, a.botWatch.activeIPs()...), allow)
+	serverBots, siteBots := a.botWatch.activeIPs()
+	block := safeBlocks(append(append([]string{}, a.rs.rules.BlockCIDRs...), serverBots...), allow)
+	siteErr := a.applySites(allow, siteBots)
 	h := hashState(block, allow)
-	if h == a.rs.lastHash {
+	if h != a.rs.lastHash {
+		if err := a.fw.Apply(block, allow); err != nil {
+			return err
+		}
+		a.rs.lastHash = h
+		a.rs.applied = int64(len(block))
+		slog.Info("firewall updated", "blocked_ranges", len(block), "always_allowed", len(allow), "backend", a.fw.Name())
+	}
+	return siteErr
+}
+
+// applySites writes the per-website block list (caller holds rs.mu).
+// Without setup-blocks those blocks can't be enforced; they are never moved
+// to the firewall, which would block the visitor from every website.
+func (a *Agent) applySites(allow []netip.Addr, bots map[string][]string) error {
+	var sites []siteblock.Site
+	any := false
+	for _, sr := range a.rs.rules.Sites {
+		var key string
+		if len(sr.Domains) > 0 {
+			key = sr.Domains[0]
+		}
+		b := safeBlocks(append(append([]string{}, sr.BlockCIDRs...), bots[key]...), allow)
+		any = any || len(b) > 0
+		sites = append(sites, siteblock.Site{Domains: sr.Domains, Block: b})
+	}
+	if !siteblock.Ready() {
+		a.rs.siteErr = ""
+		if any {
+			a.rs.siteErr = "website blocks are not active: run sudo httpowl-agent setup-blocks"
+			return errors.New(a.rs.siteErr)
+		}
 		return nil
 	}
-	if err := a.fw.Apply(block, allow); err != nil {
+	content := siteblock.Render(sites)
+	if content != a.rs.siteFile {
+		if err := siteblock.Stage(sites); err != nil {
+			return err
+		}
+		a.rs.siteFile = content
+		n := 0
+		for _, s := range sites {
+			n += len(s.Block)
+		}
+		slog.Info("website blocks staged", "websites", len(sites), "blocked_ranges", n)
+	}
+	if err := siteblock.Status(); err != nil {
+		a.rs.siteErr = err.Error()
 		return err
 	}
-	a.rs.lastHash = h
-	a.rs.applied = int64(len(block))
-	slog.Info("firewall updated", "blocked_ranges", len(block), "always_allowed", len(allow), "backend", a.fw.Name())
+	a.rs.siteErr = ""
 	return nil
+}
+
+// siteBlocksMode is "nginx" when per-website blocks are set up, else "".
+func siteBlocksMode() string {
+	if siteblock.Ready() {
+		return "nginx"
+	}
+	return ""
 }
 
 // allowList = what the server says + this machine's IPs + live SSH peers + loopback.
@@ -188,58 +245,95 @@ func hashState(block []netip.Prefix, allow []netip.Addr) [32]byte {
 	return sha256.Sum256([]byte(b.String()))
 }
 
-// botWatcher blocks IPs that send a blocked bot's user agent, for 24h.
+// botWatcher blocks IPs that send a blocked bot's user agent, for 24h:
+// from the whole server for server patterns, else from the one website.
 type botWatcher struct {
 	mu       sync.Mutex
-	patterns []string
-	ips      map[string]time.Time
+	patterns []string            // whole server
+	sitePats map[string][]string // site key (first domain) → patterns
+	hostSite map[string]string   // host name → site key
+	ips      map[botKey]time.Time
 	dirty    bool
 }
 
-func newBotWatcher() *botWatcher { return &botWatcher{ips: map[string]time.Time{}} }
+// botKey.site is "" for a whole-server block.
+type botKey struct{ site, ip string }
 
-func (b *botWatcher) setPatterns(p []string) {
+func newBotWatcher() *botWatcher {
+	return &botWatcher{ips: map[botKey]time.Time{}, sitePats: map[string][]string{}, hostSite: map[string]string{}}
+}
+
+func (b *botWatcher) setPatterns(server []string, sites []wire.SiteRules) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.patterns = p
-	if len(p) == 0 && len(b.ips) > 0 { // all bot rules removed: lift bot blocks
-		b.ips = map[string]time.Time{}
-		b.dirty = true
+	b.patterns = server
+	b.sitePats = map[string][]string{}
+	b.hostSite = map[string]string{}
+	for _, s := range sites {
+		if len(s.Domains) == 0 || len(s.BotPatterns) == 0 {
+			continue
+		}
+		key := s.Domains[0]
+		b.sitePats[key] = s.BotPatterns
+		for _, d := range s.Domains {
+			b.hostSite[strings.ToLower(d)] = key
+		}
+	}
+	for k := range b.ips { // bot rules removed: lift their blocks
+		if (k.site == "" && len(b.patterns) == 0) || (k.site != "" && len(b.sitePats[k.site]) == 0) {
+			delete(b.ips, k)
+			b.dirty = true
+		}
 	}
 }
 
 func (b *botWatcher) see(r wire.Request) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if len(b.patterns) == 0 || len(b.ips) >= 10000 {
+	if len(b.ips) >= 10000 {
 		return
 	}
 	ua := strings.ToLower(r.UA)
-	for _, p := range b.patterns {
-		if strings.Contains(ua, p) {
-			if _, ok := b.ips[r.IP]; !ok {
-				b.dirty = true
+	mark := func(site string, pats []string) bool {
+		for _, p := range pats {
+			if strings.Contains(ua, p) {
+				k := botKey{site, r.IP}
+				if _, ok := b.ips[k]; !ok {
+					b.dirty = true
+				}
+				b.ips[k] = time.Now().Add(botBlockFor)
+				return true
 			}
-			b.ips[r.IP] = time.Now().Add(botBlockFor)
-			return
 		}
+		return false
+	}
+	if mark("", b.patterns) {
+		return
+	}
+	if key, ok := b.hostSite[strings.ToLower(r.Host)]; ok {
+		mark(key, b.sitePats[key])
 	}
 }
 
-func (b *botWatcher) activeIPs() []string {
+// activeIPs returns whole-server bot IPs and per-website ones (by site key).
+func (b *botWatcher) activeIPs() (server []string, sites map[string][]string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := time.Now()
-	out := make([]string, 0, len(b.ips))
-	for ip, exp := range b.ips {
+	sites = map[string][]string{}
+	for k, exp := range b.ips {
 		if now.After(exp) {
-			delete(b.ips, ip)
+			delete(b.ips, k)
 			continue
 		}
-		out = append(out, ip)
+		if k.site == "" {
+			server = append(server, k.ip)
+		} else {
+			sites[k.site] = append(sites[k.site], k.ip)
+		}
 	}
 	b.dirty = false
-	return out
+	return server, sites
 }
 
 func (b *botWatcher) takeDirty() bool {
