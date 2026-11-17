@@ -457,7 +457,7 @@ func vhostFiles() []string {
 	c, _ := filepath.Glob("/etc/nginx/conf.d/*.conf")
 	var out []string
 	for _, f := range append(a, c...) {
-		if strings.HasPrefix(filepath.Base(f), "httpowl-") {
+		if f == MapFile || filepath.Base(f) == "httpowl-log.conf" { // HTTPowl's own http-level files
 			continue
 		}
 		out = append(out, f)
